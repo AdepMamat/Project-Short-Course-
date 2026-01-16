@@ -1,514 +1,453 @@
 /**
- * Task Repository - Day 2 Implementation
- * 
- * Implements the Repository pattern for Task entities.
- * Provides abstraction between business logic and data storage.
- * 
- * Demonstrates:
- * - Repository pattern implementation
- * - Data access abstraction
- * - Query methods for filtering and searching
- * - Caching for performance optimization
- * - Error handling and validation
- * - Consistent data access interface
+ * Task Repository - Day 3 Implementation
+ * Data access layer for Task management
  */
 
-/**
- * Base Repository Interface
- * Defines standard CRUD operations that all repositories should implement
- */
-class BaseRepository {
-    /**
-     * Create a new entity
-     * @param {Object} entity - The entity to create
-     * @returns {Promise<Object>} The created entity with generated ID
-     */
-    async create(entity) {
-        throw new Error('create method must be implemented');
-    }
-    
-    /**
-     * Find entity by ID
-     * @param {string} id - The entity ID
-     * @returns {Promise<Object|null>} The entity or null if not found
-     */
-    async findById(id) {
-        throw new Error('findById method must be implemented');
-    }
-    
-    /**
-     * Find all entities
-     * @param {Object} options - Query options (limit, offset, sort)
-     * @returns {Promise<Array>} Array of entities
-     */
-    async findAll(options = {}) {
-        throw new Error('findAll method must be implemented');
-    }
-    
-    /**
-     * Update entity by ID
-     * @param {string} id - The entity ID
-     * @param {Object} updates - Properties to update
-     * @returns {Promise<Object|null>} Updated entity or null if not found
-     */
-    async update(id, updates) {
-        throw new Error('update method must be implemented');
-    }
-    
-    /**
-     * Delete entity by ID
-     * @param {string} id - The entity ID
-     * @returns {Promise<boolean>} True if deleted, false if not found
-     */
-    async delete(id) {
-        throw new Error('delete method must be implemented');
-    }
-    
-    /**
-     * Check if entity exists
-     * @param {string} id - The entity ID
-     * @returns {Promise<boolean>} True if exists, false otherwise
-     */
-    async exists(id) {
-        const entity = await this.findById(id);
-        return entity !== null;
-    }
-    
-    /**
-     * Count total entities
-     * @param {Object} criteria - Optional filtering criteria
-     * @returns {Promise<number>} Total count
-     */
-    async count(criteria = {}) {
-        const entities = await this.findAll();
-        return entities.length;
-    }
-}
+const { TaskValidator } = require('./validation');
 
-/**
- * Task Repository
- * Handles all data access operations for Task entities
- */
-class TaskRepository extends BaseRepository {
-    constructor(storageManager) {
-        super();
-        this.storage = storageManager;
-        this.entityKey = 'tasks';
-        this._cache = new Map(); // In-memory cache for performance
-        this._cacheExpiry = 5 * 60 * 1000; // 5 minutes
+class TaskRepository {
+    constructor(storage = null) {
+        this.storage = storage;
+        this.tasks = new Map();
+        this.listeners = new Map();
     }
-    
-    /**
-     * Create a new task
-     */
+
+    // Event system for reactive updates
+    on(event, callback) {
+        if (!this.listeners.has(event)) {
+            this.listeners.set(event, []);
+        }
+        this.listeners.get(event).push(callback);
+    }
+
+    emit(event, data) {
+        if (this.listeners.has(event)) {
+            this.listeners.get(event).forEach(callback => callback(data));
+        }
+    }
+
+    // Core CRUD operations
     async create(task) {
-        try {
-            // Validate task object
-            this._validateTask(task);
-            
-            // Ensure task has an ID
-            if (!task.id) {
-                task.id = this._generateId();
-            }
-            
-            // Get existing tasks
-            const tasks = await this._getAllTasks();
-            
-            // Check for duplicate ID
-            if (tasks.some(t => t.id === task.id)) {
-                throw new Error(`Task with ID ${task.id} already exists`);
-            }
-            
-            // Add to collection
-            tasks.push(task.toJSON ? task.toJSON() : task);
-            
-            // Save to storage
-            await this._saveTasks(tasks);
-            
-            // Update cache
-            this._cache.set(task.id, {
-                data: task,
-                timestamp: Date.now()
-            });
-            
-            return task;
-        } catch (error) {
-            console.error('Error creating task:', error);
-            throw error;
+        if (!task || !task.id) {
+            throw new Error('Valid task object required');
         }
-    }
-    
-    /**
-     * Find task by ID
-     */
-    async findById(id) {
-        try {
-            // Check cache first
-            const cached = this._getFromCache(id);
-            if (cached) {
-                return cached;
-            }
-            
-            // Load from storage
-            const tasks = await this._getAllTasks();
-            const taskData = tasks.find(t => t.id === id);
-            
-            if (!taskData) {
-                return null;
-            }
-            
-            // Convert to Task object if needed
-            const task = this._hydrateTask(taskData);
-            
-            // Cache the result
-            this._cache.set(id, {
-                data: task,
-                timestamp: Date.now()
-            });
-            
-            return task;
-        } catch (error) {
-            console.error('Error finding task by ID:', error);
-            throw error;
+
+        if (this.tasks.has(task.id)) {
+            throw new Error('Task with this ID already exists');
         }
-    }
-    
-    /**
-     * Find all tasks with optional filtering
-     */
-    async findAll(options = {}) {
-        try {
-            const tasks = await this._getAllTasks();
-            let result = tasks.map(taskData => this._hydrateTask(taskData));
-            
-            // Apply filters
-            if (options.userId) {
-                result = result.filter(task => task.userId === options.userId);
-            }
-            
-            if (options.completed !== undefined) {
-                result = result.filter(task => task.completed === options.completed);
-            }
-            
-            if (options.priority) {
-                result = result.filter(task => task.priority === options.priority);
-            }
-            
-            if (options.category) {
-                result = result.filter(task => task.category === options.category);
-            }
-            
-            if (options.assignedTo) {
-                result = result.filter(task => task.assignedTo === options.assignedTo);
-            }
-            
-            // Apply sorting
-            if (options.sortBy) {
-                result = this._sortTasks(result, options.sortBy, options.sortOrder);
-            }
-            
-            // Apply pagination
-            if (options.limit || options.offset) {
-                const offset = options.offset || 0;
-                const limit = options.limit || result.length;
-                result = result.slice(offset, offset + limit);
-            }
-            
-            return result;
-        } catch (error) {
-            console.error('Error finding all tasks:', error);
-            throw error;
+
+        this.tasks.set(task.id, task);
+        this.emit('taskAdded', task);
+
+        if (this.storage) {
+            await this.saveToStorage();
         }
+
+        return task;
     }
-    
-    /**
-     * Update task by ID
-     */
-    async update(id, updates) {
-        try {
-            const tasks = await this._getAllTasks();
-            const taskIndex = tasks.findIndex(t => t.id === id);
-            
-            if (taskIndex === -1) {
-                return null;
-            }
-            
-            // Get current task data
-            const currentTask = this._hydrateTask(tasks[taskIndex]);
-            
-            // Apply updates to task object
-            Object.keys(updates).forEach(key => {
-                if (currentTask.hasOwnProperty(`_${key}`) || currentTask.hasOwnProperty(key)) {
-                    // Use setter methods if available
-                    const setterName = `set${key.charAt(0).toUpperCase() + key.slice(1)}`;
-                    const updateMethodName = `update${key.charAt(0).toUpperCase() + key.slice(1)}`;
-                    
-                    if (typeof currentTask[setterName] === 'function') {
-                        currentTask[setterName](updates[key]);
-                    } else if (typeof currentTask[updateMethodName] === 'function') {
-                        currentTask[updateMethodName](updates[key]);
-                    } else {
-                        // Direct property update
-                        if (currentTask.hasOwnProperty(`_${key}`)) {
-                            currentTask[`_${key}`] = updates[key];
-                        } else {
-                            currentTask[key] = updates[key];
-                        }
-                    }
+
+    async addTask(task) {
+        return this.create(task);
+    }
+
+    async update(taskId, updates) {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+            return null;
+        }
+
+        // Apply updates
+        Object.assign(task, updates);
+        task.updatedAt = new Date();
+
+        this.emit('taskUpdated', task);
+
+        if (this.storage) {
+            await this.saveToStorage();
+        }
+
+        return task;
+    }
+
+    async updateTask(taskId, updates) {
+        return this.update(taskId, updates);
+    }
+
+    async deleteTask(taskId) {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+            throw new Error('Task not found');
+        }
+
+        this.tasks.delete(taskId);
+        this.emit('taskDeleted', { id: taskId, task });
+
+        if (this.storage) {
+            await this.saveToStorage();
+        }
+
+        return task;
+    }
+
+    async findById(taskId) {
+        return this.tasks.get(taskId) || null;
+    }
+
+    async findAll(filter = {}) {
+        let tasks = Array.from(this.tasks.values());
+
+        // Apply filters
+        if (filter.userId) {
+            tasks = tasks.filter(task => task.userId === filter.userId);
+        }
+
+        if (filter.completed !== undefined) {
+            tasks = tasks.filter(task => task.completed === filter.completed);
+        }
+
+        if (filter.priority) {
+            tasks = tasks.filter(task => task.priority === filter.priority);
+        }
+
+        // Sorting
+        if (filter.sortBy) {
+            tasks.sort((a, b) => {
+                let aValue, bValue;
+
+                switch (filter.sortBy) {
+                    case 'title':
+                        aValue = a.title.toLowerCase();
+                        bValue = b.title.toLowerCase();
+                        break;
+                    default:
+                        return 0;
                 }
+
+                if (filter.sortOrder === 'desc') {
+                    return bValue - aValue;
+                }
+                return aValue - bValue;
             });
-            
-            // Update timestamp
-            if (currentTask._updatedAt !== undefined) {
-                currentTask._updatedAt = new Date();
-            }
-            
-            // Update in storage
-            tasks[taskIndex] = currentTask.toJSON ? currentTask.toJSON() : currentTask;
-            await this._saveTasks(tasks);
-            
-            // Update cache
-            this._cache.set(id, {
-                data: currentTask,
-                timestamp: Date.now()
-            });
-            
-            return currentTask;
-        } catch (error) {
-            console.error('Error updating task:', error);
-            throw error;
         }
-    }
-    
-    /**
-     * Delete task by ID
-     */
-    async delete(id) {
-        try {
-            const tasks = await this._getAllTasks();
-            const taskIndex = tasks.findIndex(t => t.id === id);
-            
-            if (taskIndex === -1) {
-                return false;
-            }
-            
-            // Remove from array
-            tasks.splice(taskIndex, 1);
-            
-            // Save to storage
-            await this._saveTasks(tasks);
-            
-            // Remove from cache
-            this._cache.delete(id);
-            
-            return true;
-        } catch (error) {
-            console.error('Error deleting task:', error);
-            throw error;
+
+        // Pagination
+        if (filter.limit) {
+            const offset = filter.offset || 0;
+            tasks = tasks.slice(offset, offset + filter.limit);
         }
+
+        return tasks;
     }
-    
-    // Specialized query methods
-    
-    /**
-     * Find tasks by user ID
-     */
-    async findByUserId(userId) {
-        return this.findAll({ userId });
+
+    getTask(taskId) {
+        return this.tasks.get(taskId) || null;
     }
-    
-    /**
-     * Find tasks by category
-     */
-    async findByCategory(category) {
-        return this.findAll({ category });
+
+    getAllTasks() {
+        return Array.from(this.tasks.values());
     }
-    
-    /**
-     * Find tasks by priority
-     */
-    async findByPriority(priority) {
-        return this.findAll({ priority });
+
+    // Query methods
+    getTasksByUser(userId) {
+        return this.getAllTasks().filter(task => task.userId === userId);
     }
-    
-    /**
-     * Find tasks by completion status
-     */
-    async findByStatus(completed) {
-        return this.findAll({ completed });
+
+    getTasksByAssignee(assigneeId) {
+        return this.getAllTasks().filter(task => task.assignedTo === assigneeId);
     }
-    
-    /**
-     * Find tasks assigned to a specific user
-     */
-    async findByAssignee(assignedTo) {
-        return this.findAll({ assignedTo });
+
+    getTasksByStatus(status) {
+        return this.getAllTasks().filter(task => task.status === status);
     }
-    
-    /**
-     * Find overdue tasks
-     */
-    async findOverdue() {
-        const tasks = await this.findAll();
-        const now = new Date();
-        
-        return tasks.filter(task => {
-            return !task.completed && 
-                   task.dueDate && 
-                   new Date(task.dueDate) < now;
-        });
+
+    getTasksByPriority(priority) {
+        return this.getAllTasks().filter(task => task.priority === priority);
     }
-    
-    /**
-     * Find tasks due within a date range
-     */
-    async findByDueDateRange(startDate, endDate) {
-        const tasks = await this.findAll();
-        
-        return tasks.filter(task => {
+
+    getTasksByCategory(category) {
+        return this.getAllTasks().filter(task => task.category === category);
+    }
+
+    getCompletedTasks() {
+        return this.getAllTasks().filter(task => task.completed);
+    }
+
+    getIncompleteTasks() {
+        return this.getAllTasks().filter(task => !task.completed);
+    }
+
+    getOverdueTasks() {
+        return this.getAllTasks().filter(task => task.isOverdue);
+    }
+
+    getTasksDueToday() {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        return this.getAllTasks().filter(task => {
             if (!task.dueDate) return false;
-            
             const dueDate = new Date(task.dueDate);
-            return dueDate >= startDate && dueDate <= endDate;
+            dueDate.setHours(0, 0, 0, 0);
+            return dueDate >= today && dueDate < tomorrow;
         });
     }
-    
-    /**
-     * Search tasks by text
-     */
-    async search(query) {
-        const tasks = await this.findAll();
-        const searchTerm = query.toLowerCase();
-        
-        return tasks.filter(task => {
-            return task.title.toLowerCase().includes(searchTerm) ||
-                   task.description.toLowerCase().includes(searchTerm) ||
-                   (task.tags && task.tags.some(tag => 
-                       tag.toLowerCase().includes(searchTerm)));
+
+    getTasksDueThisWeek() {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const weekFromNow = new Date(today);
+        weekFromNow.setDate(weekFromNow.getDate() + 7);
+
+        return this.getAllTasks().filter(task => {
+            if (!task.dueDate) return false;
+            const dueDate = new Date(task.dueDate);
+            dueDate.setHours(0, 0, 0, 0);
+            return dueDate >= today && dueDate <= weekFromNow;
         });
     }
-    
-    /**
-     * Get task statistics
-     */
-    async getStatistics(userId = null) {
-        const tasks = userId ? 
-            await this.findByUserId(userId) : 
-            await this.findAll();
-        
+
+    // Advanced filtering
+    getTasksByFilter(filter) {
+        let tasks = this.getAllTasks();
+
+        if (filter.userId) {
+            tasks = tasks.filter(task => task.userId === filter.userId);
+        }
+
+        if (filter.assigneeId) {
+            tasks = tasks.filter(task => task.assignedTo === filter.assigneeId);
+        }
+
+        if (filter.status) {
+            tasks = tasks.filter(task => task.status === filter.status);
+        }
+
+        if (filter.priority) {
+            tasks = tasks.filter(task => task.priority === filter.priority);
+        }
+
+        if (filter.category) {
+            tasks = tasks.filter(task => task.category === filter.category);
+        }
+
+        if (filter.completed !== undefined) {
+            tasks = tasks.filter(task => task.completed === filter.completed);
+        }
+
+        if (filter.overdue !== undefined) {
+            tasks = tasks.filter(task => task.isOverdue === filter.overdue);
+        }
+
+        if (filter.tags && filter.tags.length > 0) {
+            tasks = tasks.filter(task =>
+                filter.tags.some(tag => task.hasTag(tag))
+            );
+        }
+
+        if (filter.search) {
+            const searchTerm = filter.search.toLowerCase();
+            tasks = tasks.filter(task =>
+                task.title.toLowerCase().includes(searchTerm) ||
+                task.description.toLowerCase().includes(searchTerm)
+            );
+        }
+
+        // Sorting
+        if (filter.sortBy) {
+            tasks.sort((a, b) => {
+                let aValue, bValue;
+
+                switch (filter.sortBy) {
+                    case 'title':
+                        aValue = a.title.toLowerCase();
+                        bValue = b.title.toLowerCase();
+                        break;
+                    case 'priority':
+                        const priorityOrder = { low: 1, medium: 2, high: 3, urgent: 4 };
+                        aValue = priorityOrder[a.priority] || 0;
+                        bValue = priorityOrder[b.priority] || 0;
+                        break;
+                    case 'dueDate':
+                        aValue = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+                        bValue = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+                        break;
+                    case 'createdAt':
+                        aValue = new Date(a.createdAt).getTime();
+                        bValue = new Date(b.createdAt).getTime();
+                        break;
+                    case 'updatedAt':
+                        aValue = new Date(a.updatedAt).getTime();
+                        bValue = new Date(b.updatedAt).getTime();
+                        break;
+                    default:
+                        return 0;
+                }
+
+                if (filter.sortOrder === 'desc') {
+                    return bValue - aValue;
+                }
+                return aValue - bValue;
+            });
+        }
+
+        // Pagination
+        if (filter.limit) {
+            const offset = filter.offset || 0;
+            tasks = tasks.slice(offset, offset + filter.limit);
+        }
+
+        return tasks;
+    }
+
+    // Statistics and analytics
+    getTaskStats(userId = null) {
+        let tasks = userId ? this.getTasksByUser(userId) : this.getAllTasks();
+
         const stats = {
             total: tasks.length,
             completed: tasks.filter(t => t.completed).length,
-            pending: tasks.filter(t => !t.completed).length,
-            overdue: 0,
-            byPriority: {
-                high: tasks.filter(t => t.priority === 'high').length,
-                medium: tasks.filter(t => t.priority === 'medium').length,
-                low: tasks.filter(t => t.priority === 'low').length
-            },
+            incomplete: tasks.filter(t => !t.completed).length,
+            overdue: tasks.filter(t => t.isOverdue).length,
+            byPriority: {},
+            byStatus: {},
             byCategory: {}
         };
-        
-        // Count overdue tasks
-        const now = new Date();
-        stats.overdue = tasks.filter(task => {
-            return !task.completed && 
-                   task.dueDate && 
-                   new Date(task.dueDate) < now;
-        }).length;
-        
-        // Count by category
-        tasks.forEach(task => {
-            const category = task.category || 'uncategorized';
-            stats.byCategory[category] = (stats.byCategory[category] || 0) + 1;
+
+        // Priority breakdown
+        ['low', 'medium', 'high', 'urgent'].forEach(priority => {
+            stats.byPriority[priority] = tasks.filter(t => t.priority === priority).length;
         });
-        
+
+        // Status breakdown
+        ['pending', 'in-progress', 'completed', 'cancelled', 'on-hold'].forEach(status => {
+            stats.byStatus[status] = tasks.filter(t => t.status === status).length;
+        });
+
+        // Category breakdown
+        const categories = [...new Set(tasks.map(t => t.category))];
+        categories.forEach(category => {
+            stats.byCategory[category] = tasks.filter(t => t.category === category).length;
+        });
+
         return stats;
     }
-    
-    // Private helper methods
-    
-    async _getAllTasks() {
-        return this.storage.load(this.entityKey, []);
-    }
-    
-    async _saveTasks(tasks) {
-        return this.storage.save(this.entityKey, tasks);
-    }
-    
-    _validateTask(task) {
-        if (!task) {
-            throw new Error('Task is required');
+
+    // Bulk operations
+    async addTasks(tasks) {
+        if (!Array.isArray(tasks)) {
+            throw new Error('Array of tasks required');
         }
-        
-        if (!task.title || task.title.trim() === '') {
-            throw new Error('Task title is required');
-        }
-        
-        if (!task.userId) {
-            throw new Error('Task must be assigned to a user');
-        }
-    }
-    
-    _hydrateTask(taskData) {
-        // Convert plain object back to Task instance
-        // This assumes you have a Task.fromJSON method
-        if (typeof Task !== 'undefined' && Task.fromJSON) {
-            return Task.fromJSON(taskData);
-        }
-        return taskData;
-    }
-    
-    _generateId() {
-        return 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    }
-    
-    _getFromCache(id) {
-        const cached = this._cache.get(id);
-        if (!cached) return null;
-        
-        // Check if cache entry is expired
-        if (Date.now() - cached.timestamp > this._cacheExpiry) {
-            this._cache.delete(id);
-            return null;
-        }
-        
-        return cached.data;
-    }
-    
-    _sortTasks(tasks, sortBy, sortOrder = 'asc') {
-        return tasks.sort((a, b) => {
-            let aValue = a[sortBy];
-            let bValue = b[sortBy];
-            
-            // Handle date sorting
-            if (sortBy.includes('Date') || sortBy.includes('At')) {
-                aValue = new Date(aValue);
-                bValue = new Date(bValue);
+
+        const results = [];
+        const errors = [];
+
+        for (const task of tasks) {
+            try {
+                const addedTask = await this.addTask(task);
+                results.push(addedTask);
+            } catch (error) {
+                errors.push({ task, error: error.message });
             }
-            
-            // Handle string sorting
-            if (typeof aValue === 'string') {
-                aValue = aValue.toLowerCase();
-                bValue = bValue.toLowerCase();
+        }
+
+        if (this.storage) {
+            await this.saveToStorage();
+        }
+
+        return { results, errors };
+    }
+
+    async deleteTasks(taskIds) {
+        if (!Array.isArray(taskIds)) {
+            throw new Error('Array of task IDs required');
+        }
+
+        const results = [];
+        const errors = [];
+
+        for (const taskId of taskIds) {
+            try {
+                const deletedTask = await this.deleteTask(taskId);
+                results.push(deletedTask);
+            } catch (error) {
+                errors.push({ taskId, error: error.message });
             }
-            
-            let comparison = 0;
-            if (aValue > bValue) {
-                comparison = 1;
-            } else if (aValue < bValue) {
-                comparison = -1;
+        }
+
+        if (this.storage) {
+            await this.saveToStorage();
+        }
+
+        return { results, errors };
+    }
+
+    // Storage operations
+    async loadFromStorage() {
+        if (!this.storage) {
+            throw new Error('No storage configured');
+        }
+
+        try {
+            const data = await this.storage.load();
+            if (data && Array.isArray(data.tasks)) {
+                this.tasks.clear();
+                data.tasks.forEach(taskData => {
+                    const Task = require('./enhanced-task-model');
+                    const task = Task.fromJSON(taskData);
+                    this.tasks.set(task.id, task);
+                });
             }
-            
-            return sortOrder === 'desc' ? -comparison : comparison;
-        });
+        } catch (error) {
+            throw new Error(`Failed to load from storage: ${error.message}`);
+        }
+    }
+
+    async saveToStorage() {
+        if (!this.storage) {
+            throw new Error('No storage configured');
+        }
+
+        try {
+            const data = {
+                tasks: Array.from(this.tasks.values()).map(task => task.toJSON()),
+                lastSaved: new Date().toISOString()
+            };
+            await this.storage.save(data);
+        } catch (error) {
+            throw new Error(`Failed to save to storage: ${error.message}`);
+        }
+    }
+
+    // Utility methods
+    async exists(taskId) {
+        return this.tasks.has(taskId);
+    }
+
+    async count() {
+        return this.tasks.size;
+    }
+
+    clear() {
+        this.tasks.clear();
+        if (this.storage) {
+            this.saveToStorage();
+        }
+    }
+
+    get size() {
+        return this.tasks.size;
+    }
+
+    hasTask(taskId) {
+        return this.tasks.has(taskId);
+    }
+
+    // Iterator for easy looping
+    [Symbol.iterator]() {
+        return this.tasks.values();
     }
 }
 
-// Export for use in other modules
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { BaseRepository, TaskRepository };
-} else {
-    window.BaseRepository = BaseRepository;
-    window.TaskRepository = TaskRepository;
-}
+module.exports = { TaskRepository };

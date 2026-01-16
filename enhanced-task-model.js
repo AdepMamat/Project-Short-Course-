@@ -1,456 +1,410 @@
 /**
- * Enhanced Task Model - Day 2 Implementation
- * 
- * Represents a task with enhanced properties for multi-user support,
- * categorization, time tracking, and improved organization.
- * 
- * Demonstrates:
- * - Enhanced encapsulation with additional properties
- * - Multi-user support with ownership and assignment
- * - Category and tag management for organization
- * - Time tracking with estimated and actual hours
- * - Due date management with overdue detection
- * - Status management beyond simple completion
- * - Note and attachment support for rich task data
- * - Dependency tracking between tasks
+ * Enhanced Task Model - Day 3 Implementation
+ * Feature-complete Task model with advanced features
  */
+
+const { TaskValidator } = require('./validation');
+
 class Task {
-    constructor(title, description, userId, options = {}) {
+    constructor(title, description = '', userId, options = {}) {
         // Validate required parameters
-        this._validateConstructorParams(title, description, userId);
-        
-        // Core properties (immutable after creation)
-        this._id = options.id || this._generateId();
-        this._createdAt = options.createdAt ? new Date(options.createdAt) : new Date();
-        
-        // Basic properties (from Day 1, enhanced)
-        this._title = title.trim();
-        this._description = description ? description.trim() : '';
-        this._priority = this._validatePriority(options.priority || 'medium');
-        this._completed = Boolean(options.completed);
-        this._updatedAt = options.updatedAt ? new Date(options.updatedAt) : new Date();
-        
-        // User-related properties (new in Day 2)
-        this._userId = userId; // Owner of the task
-        this._assignedTo = options.assignedTo || userId; // Who should complete it
-        
-        // Organization properties (new in Day 2)
-        this._category = this._validateCategory(options.category || 'general');
-        this._tags = this._validateTags(options.tags || []);
-        
-        // Time-related properties (new in Day 2)
-        this._dueDate = options.dueDate ? new Date(options.dueDate) : null;
-        this._estimatedHours = this._validateHours(options.estimatedHours);
-        this._actualHours = this._validateHours(options.actualHours);
-        
-        // Status properties (enhanced in Day 2)
-        this._status = this._validateStatus(options.status || 'pending');
-        this._completedAt = options.completedAt ? new Date(options.completedAt) : null;
-        
-        // Metadata (new in Day 2)
-        this._notes = options.notes || [];
-        this._attachments = options.attachments || [];
-        this._dependencies = options.dependencies || []; // Task IDs this task depends on
+        if (!title || typeof title !== 'string' || title.trim() === '') {
+            throw new Error('Task title is required');
+        }
+        if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+            throw new Error('User ID is required');
+        }
+
+        // Core properties
+        this.id = this.generateId();
+        this.title = title.trim();
+        this.description = (description || '').trim();
+        this.userId = userId.trim();
+        this.assignedTo = options.assignedTo || userId;
+
+        // Status and completion
+        this.completed = false;
+        this.status = 'pending';
+        this.completedAt = null;
+
+        // Priority and categorization
+        this.priority = this.validatePriority(options.priority || 'medium');
+        this.category = this.normalizeCategory(options.category || 'general');
+
+        // Time tracking
+        this.createdAt = new Date();
+        this.updatedAt = new Date();
+        this.dueDate = options.dueDate ? new Date(options.dueDate) : null;
+        this.estimatedHours = options.estimatedHours || null;
+        this.actualHours = options.actualHours || null;
+
+        // Collections (using private properties)
+        this._tags = [];
+        this._notes = [];
+        this._dependencies = [];
+
+        // Additional metadata
+        this.projectId = options.projectId || null;
+        this.parentTaskId = options.parentTaskId || null;
+        this.recurrence = options.recurrence || null;
     }
-    
-    // Immutable properties (read-only)
-    get id() { return this._id; }
-    get createdAt() { return new Date(this._createdAt); }
-    get userId() { return this._userId; }
-    
-    // Basic properties (with controlled access)
-    get title() { return this._title; }
-    get description() { return this._description; }
-    get priority() { return this._priority; }
-    get completed() { return this._completed; }
-    get updatedAt() { return new Date(this._updatedAt); }
-    
-    // User-related properties
-    get assignedTo() { return this._assignedTo; }
-    
-    // Organization properties
-    get category() { return this._category; }
-    get tags() { return [...this._tags]; } // Return copy to prevent mutation
-    
-    // Time-related properties
-    get dueDate() { return this._dueDate ? new Date(this._dueDate) : null; }
-    get estimatedHours() { return this._estimatedHours; }
-    get actualHours() { return this._actualHours; }
-    
-    // Status properties
-    get status() { return this._status; }
-    get completedAt() { return this._completedAt ? new Date(this._completedAt) : null; }
-    
-    // Metadata properties
-    get notes() { return [...this._notes]; }
-    get attachments() { return [...this._attachments]; }
-    get dependencies() { return [...this._dependencies]; }
-    
-    // Computed properties
-    get isOverdue() {
-        if (!this._dueDate || this._completed) return false;
-        return new Date() > this._dueDate;
+
+    generateId() {
+        return 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     }
-    
-    get daysUntilDue() {
-        if (!this._dueDate) return null;
-        const now = new Date();
-        const diffTime = this._dueDate - now;
-        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    validatePriority(priority) {
+        const validPriorities = ['low', 'medium', 'high', 'urgent'];
+        if (!validPriorities.includes(priority)) {
+            throw new Error('Invalid priority');
+        }
+        return priority;
     }
-    
-    get progress() {
-        if (this._completed) return 100;
-        if (!this._estimatedHours || !this._actualHours) return 0;
-        return Math.min(100, (this._actualHours / this._estimatedHours) * 100);
+
+    normalizeCategory(category) {
+        return (category || 'general').toString().trim().toLowerCase();
     }
-    
-    // Basic update methods (from Day 1, enhanced)
+
+    // Title management
     updateTitle(newTitle) {
-        if (!newTitle || newTitle.trim() === '') {
+        if (!newTitle || typeof newTitle !== 'string' || newTitle.trim() === '') {
             throw new Error('Task title cannot be empty');
         }
-        this._title = newTitle.trim();
-        this._touch();
+        this.title = newTitle.trim();
+        this.updatedAt = new Date();
         return this;
     }
-    
+
+    // Description management
     updateDescription(newDescription) {
-        this._description = newDescription ? newDescription.trim() : '';
-        this._touch();
+        this.description = (newDescription || '').toString().trim();
+        this.updatedAt = new Date();
         return this;
     }
-    
+
+    // Priority management
     updatePriority(newPriority) {
-        this._priority = this._validatePriority(newPriority);
-        this._touch();
+        this.priority = this.validatePriority(newPriority);
+        this.updatedAt = new Date();
         return this;
     }
-    
-    // Completion methods (enhanced)
+
+    // Completion management
     markComplete() {
-        if (this._completed) return this;
-        
-        this._completed = true;
-        this._status = 'completed';
-        this._completedAt = new Date();
-        this._touch();
-        return this;
-    }
-    
-    markIncomplete() {
-        if (!this._completed) return this;
-        
-        this._completed = false;
-        this._status = 'pending';
-        this._completedAt = null;
-        this._touch();
-        return this;
-    }
-    
-    // Assignment methods (new in Day 2)
-    assignTo(userId) {
-        if (!userId || typeof userId !== 'string') {
-            throw new Error('Valid user ID is required for assignment');
+        if (!this.completed) {
+            this.completed = true;
+            this.status = 'completed';
+            this.completedAt = new Date();
+            this.updatedAt = new Date();
         }
-        this._assignedTo = userId;
-        this._touch();
         return this;
     }
-    
+
+    markIncomplete() {
+        if (this.completed) {
+            this.completed = false;
+            this.status = 'pending';
+            this.completedAt = null;
+            this.updatedAt = new Date();
+        }
+        return this;
+    }
+
+    // Assignment management
+    assignTo(userId) {
+        if (!userId || typeof userId !== 'string' || userId.trim() === '') {
+            throw new Error('Valid user ID is required');
+        }
+        this.assignedTo = userId.trim();
+        this.updatedAt = new Date();
+        return this;
+    }
+
     reassignToOwner() {
-        this._assignedTo = this._userId;
-        this._touch();
+        this.assignedTo = this.userId;
+        this.updatedAt = new Date();
         return this;
     }
-    
-    // Category methods (new in Day 2)
+
+    // Category management
     setCategory(category) {
-        this._category = this._validateCategory(category);
-        this._touch();
+        if (!category || typeof category !== 'string' || category.trim() === '') {
+            throw new Error('Category must be a non-empty string');
+        }
+        this.category = this.normalizeCategory(category);
+        this.updatedAt = new Date();
         return this;
     }
-    
-    // Tag methods (new in Day 2)
+
+    // Tag management
     addTag(tag) {
-        if (!tag || typeof tag !== 'string') {
+        if (!tag || typeof tag !== 'string' || tag.trim() === '') {
             throw new Error('Tag must be a non-empty string');
         }
-        
         const normalizedTag = tag.trim().toLowerCase();
         if (!this._tags.includes(normalizedTag)) {
             this._tags.push(normalizedTag);
-            this._touch();
+            this.updatedAt = new Date();
         }
         return this;
     }
-    
+
     removeTag(tag) {
-        const normalizedTag = tag.trim().toLowerCase();
+        const normalizedTag = tag.toString().trim().toLowerCase();
         const index = this._tags.indexOf(normalizedTag);
         if (index > -1) {
             this._tags.splice(index, 1);
-            this._touch();
+            this.updatedAt = new Date();
         }
         return this;
     }
-    
+
     clearTags() {
         this._tags = [];
-        this._touch();
+        this.updatedAt = new Date();
         return this;
     }
-    
+
     hasTag(tag) {
-        return this._tags.includes(tag.trim().toLowerCase());
+        const normalizedTag = tag.toString().trim().toLowerCase();
+        return this._tags.includes(normalizedTag);
     }
-    
-    // Time management methods (new in Day 2)
-    setDueDate(date) {
-        if (date && !(date instanceof Date)) {
-            date = new Date(date);
+
+    // Due date management
+    setDueDate(dueDate) {
+        if (dueDate) {
+            const date = new Date(dueDate);
+            if (isNaN(date.getTime())) {
+                throw new Error('Invalid due date');
+            }
+            this.dueDate = date;
+        } else {
+            this.dueDate = null;
         }
-        
-        if (date && isNaN(date.getTime())) {
-            throw new Error('Invalid due date');
-        }
-        
-        this._dueDate = date;
-        this._touch();
+        this.updatedAt = new Date();
         return this;
     }
-    
+
     clearDueDate() {
-        this._dueDate = null;
-        this._touch();
+        this.dueDate = null;
+        this.updatedAt = new Date();
         return this;
     }
-    
+
+    get isOverdue() {
+        if (!this.dueDate || this.completed) return false;
+        const dueDate = new Date(this.dueDate);
+        const today = new Date();
+        dueDate.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0);
+        return dueDate < today;
+    }
+
+    get daysUntilDue() {
+        if (!this.dueDate) return null;
+        const dueDate = new Date(this.dueDate);
+        const today = new Date();
+        dueDate.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0);
+        const diffTime = dueDate.getTime() - today.getTime();
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    }
+
+    // Time tracking
     setEstimatedHours(hours) {
-        this._estimatedHours = this._validateHours(hours);
-        this._touch();
+        if (hours !== null && (typeof hours !== 'number' || hours < 0)) {
+            throw new Error('Hours must be a positive number');
+        }
+        this.estimatedHours = hours;
+        this.updatedAt = new Date();
         return this;
     }
-    
+
     setActualHours(hours) {
-        this._actualHours = this._validateHours(hours);
-        this._touch();
+        if (hours !== null && (typeof hours !== 'number' || hours < 0)) {
+            throw new Error('Hours must be a positive number');
+        }
+        this.actualHours = hours;
+        this.updatedAt = new Date();
         return this;
     }
-    
+
     addTimeSpent(hours) {
         if (typeof hours !== 'number' || hours < 0) {
             throw new Error('Hours must be a positive number');
         }
-        
-        this._actualHours = (this._actualHours || 0) + hours;
-        this._touch();
+        this.actualHours = (this.actualHours || 0) + hours;
+        this.updatedAt = new Date();
         return this;
     }
-    
-    // Status methods (new in Day 2)
+
+    get progress() {
+        if (this.completed) return 100;
+        if (!this.estimatedHours || !this.actualHours) return 0;
+        const progress = (this.actualHours / this.estimatedHours) * 100;
+        return Math.min(progress, 100);
+    }
+
+    // Status management
     setStatus(status) {
-        this._status = this._validateStatus(status);
-        
-        // Auto-update completion status based on status
-        if (status === 'completed' && !this._completed) {
+        const validStatuses = ['pending', 'in-progress', 'completed', 'cancelled', 'on-hold'];
+        if (!validStatuses.includes(status)) {
+            throw new Error('Invalid status');
+        }
+        this.status = status;
+
+        // Auto-update completion based on status
+        if (status === 'completed' && !this.completed) {
             this.markComplete();
-        } else if (status !== 'completed' && this._completed) {
+        } else if (status !== 'completed' && this.completed) {
             this.markIncomplete();
         }
-        
+
+        this.updatedAt = new Date();
         return this;
     }
-    
-    // Note methods (new in Day 2)
-    addNote(note, author = null) {
-        if (!note || typeof note !== 'string') {
+
+    // Notes management
+    addNote(content, author = this.userId) {
+        if (!content || typeof content !== 'string' || content.trim() === '') {
             throw new Error('Note must be a non-empty string');
         }
-        
-        const noteObj = {
-            id: this._generateId(),
-            content: note.trim(),
+        const note = {
+            id: this.generateId(),
+            content: content.trim(),
             author: author,
             createdAt: new Date()
         };
-        
-        this._notes.push(noteObj);
-        this._touch();
+        this.notes.push(note);
+        this.updatedAt = new Date();
         return this;
     }
-    
+
     removeNote(noteId) {
-        const index = this._notes.findIndex(note => note.id === noteId);
+        const index = this.notes.findIndex(note => note.id === noteId);
         if (index > -1) {
-            this._notes.splice(index, 1);
-            this._touch();
+            this.notes.splice(index, 1);
+            this.updatedAt = new Date();
         }
         return this;
     }
-    
-    // Dependency methods (new in Day 2)
+
+    // Dependencies management
     addDependency(taskId) {
-        if (!taskId || typeof taskId !== 'string') {
-            throw new Error('Task ID must be a non-empty string');
-        }
-        
-        if (taskId === this._id) {
+        if (taskId === this.id) {
             throw new Error('Task cannot depend on itself');
         }
-        
-        if (!this._dependencies.includes(taskId)) {
-            this._dependencies.push(taskId);
-            this._touch();
+        if (!this.dependencies.includes(taskId)) {
+            this.dependencies.push(taskId);
+            this.updatedAt = new Date();
         }
         return this;
     }
-    
+
     removeDependency(taskId) {
-        const index = this._dependencies.indexOf(taskId);
+        const index = this.dependencies.indexOf(taskId);
         if (index > -1) {
-            this._dependencies.splice(index, 1);
-            this._touch();
+            this.dependencies.splice(index, 1);
+            this.updatedAt = new Date();
         }
         return this;
     }
-    
+
     hasDependency(taskId) {
-        return this._dependencies.includes(taskId);
+        return this.dependencies.includes(taskId);
     }
-    
-    // Utility methods
-    clone() {
-        const clonedData = this.toJSON();
-        clonedData.id = this._generateId(); // New ID for clone
-        clonedData.createdAt = new Date();
-        clonedData.updatedAt = new Date();
-        return Task.fromJSON(clonedData);
-    }
-    
-    // Serialization methods
+
+    // Serialization
     toJSON() {
         return {
-            id: this._id,
-            title: this._title,
-            description: this._description,
-            userId: this._userId,
-            assignedTo: this._assignedTo,
-            priority: this._priority,
-            category: this._category,
-            tags: [...this._tags],
-            completed: this._completed,
-            status: this._status,
-            dueDate: this._dueDate ? this._dueDate.toISOString() : null,
-            estimatedHours: this._estimatedHours,
-            actualHours: this._actualHours,
-            notes: [...this._notes],
-            attachments: [...this._attachments],
-            dependencies: [...this._dependencies],
-            createdAt: this._createdAt.toISOString(),
-            updatedAt: this._updatedAt.toISOString(),
-            completedAt: this._completedAt ? this._completedAt.toISOString() : null
+            id: this.id,
+            title: this.title,
+            description: this.description,
+            userId: this.userId,
+            assignedTo: this.assignedTo,
+            completed: this.completed,
+            status: this.status,
+            completedAt: this.completedAt,
+            priority: this.priority,
+            category: this.category,
+            createdAt: this.createdAt,
+            updatedAt: this.updatedAt,
+            dueDate: this.dueDate,
+            estimatedHours: this.estimatedHours,
+            actualHours: this.actualHours,
+            tags: [...this.tags],
+            notes: [...this.notes],
+            dependencies: [...this.dependencies],
+            projectId: this.projectId,
+            parentTaskId: this.parentTaskId,
+            recurrence: this.recurrence
         };
     }
-    
-    static fromJSON(data) {
-        const task = new Task(data.title, data.description, data.userId, {
-            id: data.id,
-            assignedTo: data.assignedTo,
-            priority: data.priority,
-            category: data.category,
-            tags: data.tags,
-            completed: data.completed,
-            status: data.status,
-            dueDate: data.dueDate,
-            estimatedHours: data.estimatedHours,
-            actualHours: data.actualHours,
-            notes: data.notes,
-            attachments: data.attachments,
-            dependencies: data.dependencies,
-            createdAt: data.createdAt,
-            updatedAt: data.updatedAt,
-            completedAt: data.completedAt
+
+    static fromJSON(json) {
+        const task = new Task(json.title, json.description, json.userId, {
+            assignedTo: json.assignedTo,
+            priority: json.priority,
+            category: json.category,
+            dueDate: json.dueDate,
+            estimatedHours: json.estimatedHours,
+            actualHours: json.actualHours,
+            projectId: json.projectId,
+            parentTaskId: json.parentTaskId,
+            recurrence: json.recurrence
         });
-        
+
+        // Restore additional properties
+        task.id = json.id;
+        task.completed = json.completed;
+        task.status = json.status;
+        task.completedAt = json.completedAt ? new Date(json.completedAt) : null;
+        task.createdAt = new Date(json.createdAt);
+        task.updatedAt = new Date(json.updatedAt);
+        task._tags = [...(json.tags || [])];
+        task._notes = [...(json.notes || [])];
+        task._dependencies = [...(json.dependencies || [])];
+
         return task;
     }
-    
-    // Private validation methods
-    _validateConstructorParams(title, description, userId) {
-        if (!title || typeof title !== 'string' || title.trim() === '') {
-            throw new Error('Task title is required and must be a non-empty string');
-        }
-        
-        if (description !== null && description !== undefined && typeof description !== 'string') {
-            throw new Error('Task description must be a string or null');
-        }
-        
-        if (!userId || typeof userId !== 'string') {
-            throw new Error('User ID is required and must be a non-empty string');
-        }
+
+    // Cloning
+    clone() {
+        const json = this.toJSON();
+        const cloned = Task.fromJSON(json);
+        cloned.id = this.generateId(); // Generate new ID for clone
+        cloned.createdAt = new Date();
+        cloned.updatedAt = new Date();
+        cloned.completedAt = null;
+        cloned.completed = false;
+        cloned.status = 'pending';
+        return cloned;
     }
-    
-    _validatePriority(priority) {
-        const validPriorities = ['low', 'medium', 'high', 'urgent'];
-        if (!validPriorities.includes(priority)) {
-            throw new Error(`Invalid priority: ${priority}. Must be one of: ${validPriorities.join(', ')}`);
-        }
-        return priority;
+
+    // Getters for computed properties
+    get tags() {
+        return [...(this._tags || [])];
     }
-    
-    _validateCategory(category) {
-        if (!category || typeof category !== 'string') {
-            throw new Error('Category must be a non-empty string');
-        }
-        return category.trim().toLowerCase();
+
+    set tags(value) {
+        this._tags = Array.isArray(value) ? [...value] : [];
     }
-    
-    _validateTags(tags) {
-        if (!Array.isArray(tags)) {
-            throw new Error('Tags must be an array');
-        }
-        
-        return tags.map(tag => {
-            if (typeof tag !== 'string') {
-                throw new Error('All tags must be strings');
-            }
-            return tag.trim().toLowerCase();
-        });
+
+    get notes() {
+        return [...(this._notes || [])];
     }
-    
-    _validateStatus(status) {
-        const validStatuses = ['pending', 'in-progress', 'blocked', 'completed', 'cancelled'];
-        if (!validStatuses.includes(status)) {
-            throw new Error(`Invalid status: ${status}. Must be one of: ${validStatuses.join(', ')}`);
-        }
-        return status;
+
+    set notes(value) {
+        this._notes = Array.isArray(value) ? [...value] : [];
     }
-    
-    _validateHours(hours) {
-        if (hours === null || hours === undefined) {
-            return null;
-        }
-        
-        if (typeof hours !== 'number' || hours < 0) {
-            throw new Error('Hours must be a positive number or null');
-        }
-        
-        return hours;
+
+    get dependencies() {
+        return [...(this._dependencies || [])];
     }
-    
-    _generateId() {
-        return 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    }
-    
-    _touch() {
-        this._updatedAt = new Date();
+
+    set dependencies(value) {
+        this._dependencies = Array.isArray(value) ? [...value] : [];
     }
 }
 
-// Export for use in other modules
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = Task;
-} else {
-    window.Task = Task;
-}
+module.exports = Task;
